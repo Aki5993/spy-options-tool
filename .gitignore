@@ -1,0 +1,8 @@
+.env
+.cache/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+models/xgb_model.json
+models/feature_names.txt
