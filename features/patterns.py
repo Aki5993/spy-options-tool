@@ -39,8 +39,8 @@ def detect_flag_patterns(df: pd.DataFrame,
 
         for flag_days in [5, 8, 12]:
             # Shift poles forward so the flag follows the pole
-            had_bull_pole = bull_pole.shift(flag_days).fillna(False)
-            had_bear_pole = bear_pole.shift(flag_days).fillna(False)
+            had_bull_pole = bull_pole.shift(flag_days).astype("boolean").fillna(False).astype(bool)
+            had_bear_pole = bear_pole.shift(flag_days).astype("boolean").fillna(False).astype(bool)
 
             # Flag consolidation metrics over the flag window
             flag_high = df["High"].rolling(flag_days).max()
