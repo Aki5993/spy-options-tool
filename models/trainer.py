@@ -16,12 +16,27 @@ except ImportError:
 
 
 FEATURE_COLS = [
+    # Technical
     "RSI", "MACD", "MACD_signal", "MACD_hist", "MACD_cross_up", "MACD_cross_down",
     "BB_width", "BB_pct", "ATR",
     "above_sma20", "above_sma50", "above_sma200", "bb_squeeze",
+    # Sentiment
     "fg_normalized", "contrarian_bull", "contrarian_bear",
+    "pcr",
+    # Events
     "days_to_fomc", "fomc_proximity", "is_opex_week", "days_to_opex",
     "vix_level", "vix_regime",
+    # Macro
+    "DXY", "DXY_roc5", "DXY_roc20",
+    "Oil", "Oil_roc5", "Oil_roc20",
+    "Yield10Y", "Yield10Y_roc5", "Yield10Y_roc20",
+    "consumer_sentiment",
+    # Chart patterns
+    "bull_flag", "bear_flag",
+    # Breadth
+    "breadth_ratio", "breadth_ema10", "pct_above_sma50",
+    "n_new_highs_52wk", "n_new_lows_52wk",
+    "zweig_thrust", "hindenburg_omen",
 ]
 
 

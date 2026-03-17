@@ -215,4 +215,7 @@ def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # Forward return (target for ML)
     df["fwd_5d_return"] = df["Close"].shift(-5) / df["Close"] - 1
     df["fwd_5d_sign"] = (df["fwd_5d_return"] > 0).astype(int)
+    # Bull / Bear flag patterns
+    from features.patterns import detect_flag_patterns
+    df = detect_flag_patterns(df)
     return df

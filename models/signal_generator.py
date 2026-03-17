@@ -14,106 +14,154 @@ from config import (
 )
 from models.trainer import load_model, get_feature_cols
 
-# PCR thresholds for contrarian signal
-PCR_FEAR_THRESHOLD = 1.2     # PCR above this → fear → contrarian bullish
-PCR_COMPLACENCY_THRESHOLD = 0.7  # PCR below this → greed → contrarian bearish
+# PCR thresholds
+PCR_FEAR_THRESHOLD        = 1.2
+PCR_COMPLACENCY_THRESHOLD = 0.7
+
+# Macro thresholds
+DXY_STRONG_THRESHOLD   = 0.010   # +1%  5-day ROC → dollar strengthening
+DXY_WEAK_THRESHOLD     = -0.010  # -1%  5-day ROC → dollar weakening
+OIL_SPIKE_THRESHOLD    = 0.050   # +5%  5-day ROC → oil spike
+OIL_CRASH_THRESHOLD    = -0.050  # -5%  5-day ROC → oil crash
+YIELD_HIGH_LEVEL       = 4.5     # 10yr yield above this = headwind
+YIELD_RISING_THRESHOLD = 0.05    # +0.05 in 5 days = rising
+YIELD_FALLING_THRESHOLD= -0.10   # -0.10 in 5 days = falling
+SENTIMENT_LOW          = 65.0    # UMich < 65 → contrarian bull
+SENTIMENT_HIGH         = 95.0    # UMich > 95 → contrarian bear
 
 
 def _rule_score(row: pd.Series) -> float:
     """
-    Compute rule-based score in [0, 1].
-    0.5 = neutral, >0.5 bullish, <0.5 bearish.
+    Rule-based signal score in [0, 1].  0.5 = neutral.
 
-    Rules (each appends a score to the list; final = mean):
-      - RSI extremes + MACD confirmation (high conviction)
-      - RSI mild signals
-      - MACD crossovers (standalone)
-      - Fear & Greed contrarian extremes
-      - PCR contrarian extremes
-      - Hourly trendline breaks (high conviction)
-      - BB squeeze + VIX spike (risk flag → neutral)
+    Signal groups (each fires a score value; final = mean of all fired):
+      Technical  : RSI + MACD combos, MACD standalone, BB squeeze risk
+      Sentiment  : Fear & Greed extremes, PCR contrarian
+      Macro      : DXY direction, Oil, 10yr yield level/direction,
+                   Consumer sentiment contrarian
+      Patterns   : Bull/bear flag breaks
+      Breadth    : Zweig Breadth Thrust (strong bull), Hindenburg Omen (risk)
+      Trendline  : Hourly resistance/support breaks
+
+    Trend filter applied AFTER averaging — dampens counter-SMA50 signals by 35%.
     """
     signals = []
 
-    rsi = row.get("RSI", 50)
-    macd_cross_up = row.get("MACD_cross_up", 0)
-    macd_cross_down = row.get("MACD_cross_down", 0)
-    bb_squeeze = row.get("bb_squeeze", 0)
-    vix = row.get("vix_level", 20)
-    fg = row.get("fg_normalized", 0.5) * 100
-    pcr = row.get("pcr", 1.0)
-    above_sma50 = int(row.get("above_sma50", 1))
-    tl_break_up = row.get("tl_break_up", 0)
-    tl_break_down = row.get("tl_break_down", 0)
+    # ── Pull features ────────────────────────────────────────────────────────
+    rsi            = float(row.get("RSI",               50))
+    macd_up        = int(row.get("MACD_cross_up",        0))
+    macd_down      = int(row.get("MACD_cross_down",      0))
+    bb_squeeze     = int(row.get("bb_squeeze",           0))
+    vix            = float(row.get("vix_level",          20))
+    fg             = float(row.get("fg_normalized",      0.5)) * 100
+    pcr            = float(row.get("pcr",                1.0))
+    above_sma50    = int(row.get("above_sma50",          1))
+    tl_break_up    = int(row.get("tl_break_up",          0))
+    tl_break_down  = int(row.get("tl_break_down",        0))
+    bull_flag      = int(row.get("bull_flag",            0))
+    bear_flag      = int(row.get("bear_flag",            0))
+    zweig          = int(row.get("zweig_thrust",         0))
+    hindenburg     = int(row.get("hindenburg_omen",      0))
+    dxy_roc        = float(row.get("DXY_roc5",           0))
+    oil_roc        = float(row.get("Oil_roc5",           0))
+    yield_level    = float(row.get("Yield10Y",           4.0))
+    yield_roc      = float(row.get("Yield10Y_roc5",      0))
+    cons_sent      = float(row.get("consumer_sentiment", 80))
 
-    # ── RSI ───────────────────────────────────────────────────────────────────
-    if rsi < 30 and macd_cross_up:
-        signals.append(0.84)   # oversold + MACD confirmation → high conviction bull
-    elif rsi > 70 and macd_cross_down:
-        signals.append(0.16)   # overbought + MACD confirmation → high conviction bear
+    # ── Technical ────────────────────────────────────────────────────────────
+    if rsi < 30 and macd_up:
+        signals.append(0.84)
+    elif rsi > 70 and macd_down:
+        signals.append(0.16)
     elif rsi < 35:
         signals.append(0.64)
     elif rsi > 65:
         signals.append(0.36)
 
-    # ── MACD crossovers ───────────────────────────────────────────────────────
-    if macd_cross_up:
+    if macd_up:
         signals.append(0.68)
-    if macd_cross_down:
+    if macd_down:
         signals.append(0.32)
 
-    # ── Fear & Greed contrarian ───────────────────────────────────────────────
+    if bb_squeeze and vix > VIX_HIGH:
+        signals.append(0.50)   # risk → neutral
+
+    # ── Sentiment ────────────────────────────────────────────────────────────
     if fg < FEAR_GREED_EXTREME_FEAR:
         signals.append(0.74)
     elif fg > FEAR_GREED_EXTREME_GREED:
         signals.append(0.26)
 
-    # ── Put/Call Ratio contrarian ─────────────────────────────────────────────
     if pcr > PCR_FEAR_THRESHOLD:
         signals.append(0.70)
     elif pcr < PCR_COMPLACENCY_THRESHOLD:
         signals.append(0.30)
 
-    # ── Hourly trendline breaks (high conviction — add twice for emphasis) ────
+    # ── Macro ─────────────────────────────────────────────────────────────────
+    # DXY: strong dollar = headwind for SPY; weak dollar = tailwind
+    if dxy_roc > DXY_STRONG_THRESHOLD:
+        signals.append(0.36)
+    elif dxy_roc < DXY_WEAK_THRESHOLD:
+        signals.append(0.62)
+
+    # Oil: spike = inflationary pressure; crash = risk-off caution
+    if oil_roc > OIL_SPIKE_THRESHOLD:
+        signals.append(0.40)
+    elif oil_roc < OIL_CRASH_THRESHOLD:
+        signals.append(0.44)   # crash is also risky, mild bearish
+
+    # 10yr yield: high + rising = equity headwind; falling = tailwind
+    if yield_level > YIELD_HIGH_LEVEL and yield_roc > YIELD_RISING_THRESHOLD:
+        signals.append(0.34)
+    elif yield_roc < YIELD_FALLING_THRESHOLD:
+        signals.append(0.63)
+
+    # Consumer sentiment contrarian (UMich)
+    if cons_sent < SENTIMENT_LOW:
+        signals.append(0.70)   # depressed sentiment → contrarian bull
+    elif cons_sent > SENTIMENT_HIGH:
+        signals.append(0.30)   # euphoric sentiment → contrarian bear
+
+    # ── Chart Patterns ───────────────────────────────────────────────────────
+    if bull_flag:
+        signals.extend([0.76, 0.76])   # continuation pattern — add twice for weight
+    if bear_flag:
+        signals.extend([0.24, 0.24])
+
+    # ── Breadth ───────────────────────────────────────────────────────────────
+    if zweig:
+        signals.extend([0.86, 0.86])   # Zweig Breadth Thrust — rare, very bullish
+    if hindenburg:
+        signals.extend([0.20, 0.20])   # Hindenburg Omen — elevated risk warning
+
+    # ── Hourly trendline breaks ───────────────────────────────────────────────
     if tl_break_up:
         signals.extend([0.76, 0.76])
     if tl_break_down:
         signals.extend([0.24, 0.24])
-
-    # ── BB squeeze + VIX spike → uncertainty → pull toward neutral ────────────
-    if bb_squeeze and vix > VIX_HIGH:
-        signals.append(0.5)
 
     if not signals:
         return 0.5
 
     base = float(np.mean(signals))
 
-    # ── Trend filter (applied AFTER averaging, not as a vote) ─────────────────
-    # Dampen counter-trend signals by 35%; trend-aligned signals pass through.
+    # ── Trend filter (post-average dampener) ──────────────────────────────────
     if above_sma50 == 0 and base > 0.5:
-        base = 0.5 + (base - 0.5) * 0.65   # bullish signal below SMA50 → reduce
+        base = 0.5 + (base - 0.5) * 0.65
     elif above_sma50 == 1 and base < 0.5:
-        base = 0.5 - (0.5 - base) * 0.65   # bearish signal above SMA50 → reduce
+        base = 0.5 - (0.5 - base) * 0.65
 
     return base
 
 
-def compute_signal(latest_row: pd.Series,
-                   ml_model=None) -> dict:
+def compute_signal(latest_row: pd.Series, ml_model=None) -> dict:
     """
     Compute combined signal for a single row.
 
-    Returns dict:
-      score       : combined 0-1 score
-      direction   : 'bullish' | 'bearish' | 'neutral'
-      rule_score  : 0-1
-      ml_prob     : 0-1 (or None if no model)
-      confidence  : int 0-99
-      reduce_conf : bool (FOMC proximity flag)
-      trend_aligned : bool (signal agrees with SMA50 trend)
+    Returns dict: score, direction, rule_score, ml_prob, confidence,
+                  reduce_conf, trend_aligned.
     """
-    rule = _rule_score(latest_row)
+    rule    = _rule_score(latest_row)
     ml_prob = None
 
     if ml_model is not None:
@@ -138,21 +186,21 @@ def compute_signal(latest_row: pd.Series,
     else:
         direction = "neutral"
 
-    raw_conf = abs(combined - 0.5) * 2 * 100
+    raw_conf   = abs(combined - 0.5) * 2 * 100
     confidence = min(99, max(1, round(raw_conf)))
 
-    above_sma50 = int(latest_row.get("above_sma50", 1))
+    above_sma50   = int(latest_row.get("above_sma50", 1))
     trend_aligned = (direction == "bullish" and above_sma50 == 1) or \
                     (direction == "bearish" and above_sma50 == 0) or \
                     (direction == "neutral")
 
     return {
-        "score": combined,
-        "direction": direction,
-        "rule_score": rule,
-        "ml_prob": ml_prob,
-        "confidence": confidence,
-        "reduce_conf": fomc_proximity,
+        "score":         combined,
+        "direction":     direction,
+        "rule_score":    rule,
+        "ml_prob":       ml_prob,
+        "confidence":    confidence,
+        "reduce_conf":   fomc_proximity,
         "trend_aligned": trend_aligned,
     }
 
@@ -161,20 +209,16 @@ def generate_signals_series(df: pd.DataFrame,
                              ml_model=None,
                              min_confidence: int = 0) -> pd.DataFrame:
     """
-    Generate signal for each row in df.
-    Rows below min_confidence are forced to 'neutral'.
-    Returns df with added columns: signal_score, signal_direction.
+    Annotate every row in df with signal_score and signal_direction.
+    Rows below min_confidence are set to 'neutral'.
     """
-    scores = []
+    scores     = []
     directions = []
     for _, row in df.iterrows():
         sig = compute_signal(row, ml_model)
-        if sig["confidence"] < min_confidence:
-            directions.append("neutral")
-        else:
-            directions.append(sig["direction"])
         scores.append(sig["score"])
+        directions.append("neutral" if sig["confidence"] < min_confidence else sig["direction"])
     df = df.copy()
-    df["signal_score"] = scores
+    df["signal_score"]     = scores
     df["signal_direction"] = directions
     return df

@@ -217,3 +217,189 @@ def build_hourly_trendline_chart(hourly_df: pd.DataFrame) -> go.Figure:
     fig.update_yaxes(title_text="Vol", row=2, col=1)
 
     return fig
+
+
+def add_flag_markers(fig: go.Figure, df: pd.DataFrame,
+                     row: int = 1, col: int = 1) -> go.Figure:
+    """
+    Overlay bull/bear flag break markers on an existing figure row.
+    Call after build_main_chart to add flag annotations.
+    """
+    if "bull_flag" in df.columns:
+        flags = df[df["bull_flag"] == 1]
+        if not flags.empty:
+            fig.add_trace(go.Scatter(
+                x=flags.index,
+                y=flags["Low"] * 0.993,
+                mode="markers+text",
+                marker=dict(symbol="triangle-up", size=13,
+                            color="#00E5FF", line=dict(color="white", width=1)),
+                text="F",
+                textposition="bottom center",
+                textfont=dict(size=8, color="#00E5FF"),
+                name="Bull Flag Break",
+            ), row=row, col=col)
+
+    if "bear_flag" in df.columns:
+        flags = df[df["bear_flag"] == 1]
+        if not flags.empty:
+            fig.add_trace(go.Scatter(
+                x=flags.index,
+                y=flags["High"] * 1.007,
+                mode="markers+text",
+                marker=dict(symbol="triangle-down", size=13,
+                            color="#FF6B35", line=dict(color="white", width=1)),
+                text="F",
+                textposition="top center",
+                textfont=dict(size=8, color="#FF6B35"),
+                name="Bear Flag Break",
+            ), row=row, col=col)
+
+    return fig
+
+
+def build_macro_chart(spy_df: pd.DataFrame, macro_df: pd.DataFrame,
+                      lookback_days: int = 180) -> go.Figure:
+    """
+    4-row subplot showing SPY vs macro indicators (last lookback_days days):
+      Row 1: SPY close (normalized to 100)
+      Row 2: DXY
+      Row 3: WTI Oil
+      Row 4: 10-year Treasury yield
+    """
+    # Slice to lookback window
+    spy   = spy_df.tail(lookback_days)
+    macro = macro_df.reindex(spy.index, method="ffill")
+
+    fig = make_subplots(
+        rows=4, cols=1, shared_xaxes=True,
+        row_heights=[0.40, 0.20, 0.20, 0.20],
+        vertical_spacing=0.03,
+        subplot_titles=["SPY (normalized)", "DXY — US Dollar Index",
+                        "WTI Crude Oil ($)", "10-Year Treasury Yield (%)"],
+    )
+
+    # SPY normalized
+    spy_norm = spy["Close"] / spy["Close"].iloc[0] * 100
+    fig.add_trace(go.Scatter(x=spy.index, y=spy_norm, name="SPY",
+                             line=dict(color="#26a69a", width=2)), row=1, col=1)
+
+    # DXY
+    if "DXY" in macro.columns:
+        fig.add_trace(go.Scatter(x=macro.index, y=macro["DXY"], name="DXY",
+                                 line=dict(color="#FFD700", width=1.5)), row=2, col=1)
+
+    # Oil
+    if "Oil" in macro.columns:
+        fig.add_trace(go.Scatter(x=macro.index, y=macro["Oil"], name="WTI Oil",
+                                 line=dict(color="#FF6B35", width=1.5),
+                                 fill="tozeroy",
+                                 fillcolor="rgba(255,107,53,0.08)"), row=3, col=1)
+
+    # 10yr yield
+    if "Yield10Y" in macro.columns:
+        yield_vals = macro["Yield10Y"]
+        fig.add_trace(go.Scatter(x=macro.index, y=yield_vals, name="10Y Yield",
+                                 line=dict(color="#C77DFF", width=1.5)), row=4, col=1)
+        fig.add_hline(y=4.5, line_dash="dot", line_color="red", opacity=0.5, row=4, col=1)
+
+    fig.update_layout(
+        height=700, template="plotly_dark",
+        xaxis_rangeslider_visible=False,
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1),
+        margin=dict(l=40, r=40, t=50, b=30),
+        font=dict(size=11),
+    )
+    fig.update_yaxes(title_text="SPY", row=1, col=1)
+    fig.update_yaxes(title_text="DXY", row=2, col=1)
+    fig.update_yaxes(title_text="Oil $", row=3, col=1)
+    fig.update_yaxes(title_text="Yield %", row=4, col=1)
+
+    return fig
+
+
+def build_breadth_chart(breadth_df: pd.DataFrame,
+                         lookback_days: int = 252) -> go.Figure:
+    """
+    3-row breadth chart:
+      Row 1: % sectors above SMA50 + Zweig/Hindenburg event markers
+      Row 2: Breadth ratio + 10-day EMA
+      Row 3: 52-week new highs vs new lows (sector ETFs)
+    """
+    df = breadth_df.tail(lookback_days)
+
+    fig = make_subplots(
+        rows=3, cols=1, shared_xaxes=True,
+        row_heights=[0.40, 0.30, 0.30],
+        vertical_spacing=0.04,
+        subplot_titles=["% Sectors Above SMA50", "Daily Breadth Ratio + EMA10",
+                        "52-Week New Highs vs New Lows (Sectors)"],
+    )
+
+    # Row 1: % above SMA50
+    if "pct_above_sma50" in df.columns:
+        fig.add_trace(go.Scatter(
+            x=df.index, y=df["pct_above_sma50"] * 100,
+            name="% > SMA50", fill="tozeroy",
+            line=dict(color="#26a69a"), fillcolor="rgba(38,166,154,0.15)",
+        ), row=1, col=1)
+        fig.add_hline(y=50, line_dash="dot", line_color="gray", opacity=0.5, row=1, col=1)
+
+    # Zweig thrust events
+    if "zweig_thrust" in df.columns:
+        z = df[df["zweig_thrust"] == 1]
+        if not z.empty:
+            fig.add_trace(go.Scatter(
+                x=z.index, y=[55] * len(z),
+                mode="markers", marker=dict(symbol="star", size=14, color="#FFD700"),
+                name="Zweig Thrust",
+            ), row=1, col=1)
+
+    # Hindenburg Omen events
+    if "hindenburg_omen" in df.columns:
+        h = df[df["hindenburg_omen"] == 1]
+        if not h.empty:
+            fig.add_trace(go.Scatter(
+                x=h.index, y=[45] * len(h),
+                mode="markers", marker=dict(symbol="x", size=10, color="#FF4444"),
+                name="Hindenburg Omen",
+            ), row=1, col=1)
+
+    # Row 2: breadth ratio + EMA
+    if "breadth_ratio" in df.columns:
+        fig.add_trace(go.Bar(
+            x=df.index, y=df["breadth_ratio"],
+            name="Daily Breadth",
+            marker_color=df["breadth_ratio"].apply(
+                lambda x: "rgba(38,166,154,0.5)" if x >= 0.5 else "rgba(239,83,80,0.5)"
+            ),
+        ), row=2, col=1)
+    if "breadth_ema10" in df.columns:
+        fig.add_trace(go.Scatter(
+            x=df.index, y=df["breadth_ema10"],
+            name="EMA10", line=dict(color="#FFD700", width=2),
+        ), row=2, col=1)
+        fig.add_hline(y=0.615, line_dash="dot", line_color="green",
+                      opacity=0.6, row=2, col=1)
+        fig.add_hline(y=0.400, line_dash="dot", line_color="red",
+                      opacity=0.6, row=2, col=1)
+
+    # Row 3: new highs vs lows
+    if "n_new_highs_52wk" in df.columns:
+        fig.add_trace(go.Bar(
+            x=df.index, y=df["n_new_highs_52wk"],
+            name="New Highs", marker_color="rgba(38,166,154,0.7)",
+        ), row=3, col=1)
+    if "n_new_lows_52wk" in df.columns:
+        fig.add_trace(go.Bar(
+            x=df.index, y=-df["n_new_lows_52wk"],
+            name="New Lows", marker_color="rgba(239,83,80,0.7)",
+        ), row=3, col=1)
+
+    fig.update_layout(
+        height=650, template="plotly_dark", barmode="overlay",
+        xaxis_rangeslider_visible=False,
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1),
+        margin=dict(l=40, r=40, t=50, b=30), font=dict(size=11),
+    )
+    return fig
